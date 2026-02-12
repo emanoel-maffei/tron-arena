@@ -8,16 +8,17 @@ export interface Player {
   alive: boolean;
   color: string;
   glowColor: string;
+  team: number; // 0 or 1
 }
 
 export interface GameState {
-  players: [Player, Player];
+  players: Player[];
   gridWidth: number;
   gridHeight: number;
   cellSize: number;
   gameOver: boolean;
-  winner: number | null;
-  scores: [number, number];
+  winnerTeam: number | null;
+  teamScores: [number, number];
   running: boolean;
   speed: number;
 }
@@ -30,31 +31,55 @@ export function createInitialState(canvasWidth: number, canvasHeight: number): G
 
   return {
     players: [
+      // Team 0 (Cyan)
       {
-        x: Math.floor(gridWidth * 0.25),
-        y: Math.floor(gridHeight / 2),
+        x: Math.floor(gridWidth * 0.2),
+        y: Math.floor(gridHeight * 0.35),
         direction: "right",
         trail: [],
         alive: true,
         color: "#00e5ff",
         glowColor: "rgba(0, 229, 255, 0.6)",
+        team: 0,
       },
       {
-        x: Math.floor(gridWidth * 0.75),
-        y: Math.floor(gridHeight / 2),
+        x: Math.floor(gridWidth * 0.2),
+        y: Math.floor(gridHeight * 0.65),
+        direction: "right",
+        trail: [],
+        alive: true,
+        color: "#00e5a0",
+        glowColor: "rgba(0, 229, 160, 0.6)",
+        team: 0,
+      },
+      // Team 1 (Orange)
+      {
+        x: Math.floor(gridWidth * 0.8),
+        y: Math.floor(gridHeight * 0.35),
         direction: "left",
         trail: [],
         alive: true,
         color: "#ff6d00",
         glowColor: "rgba(255, 109, 0, 0.6)",
+        team: 1,
+      },
+      {
+        x: Math.floor(gridWidth * 0.8),
+        y: Math.floor(gridHeight * 0.65),
+        direction: "left",
+        trail: [],
+        alive: true,
+        color: "#ff2d6d",
+        glowColor: "rgba(255, 45, 109, 0.6)",
+        team: 1,
       },
     ],
     gridWidth,
     gridHeight,
     cellSize: CELL_SIZE,
     gameOver: false,
-    winner: null,
-    scores: [0, 0],
+    winnerTeam: null,
+    teamScores: [0, 0],
     running: false,
     speed: 60,
   };
@@ -72,14 +97,17 @@ export function isOpposite(current: Direction, next: Direction): boolean {
 export function tick(state: GameState): GameState {
   if (state.gameOver || !state.running) return state;
 
-  const newState = { ...state, players: [{ ...state.players[0] }, { ...state.players[1] }] as [Player, Player] };
+  const newState: GameState = {
+    ...state,
+    players: state.players.map(p => ({ ...p, trail: [...p.trail] })),
+    teamScores: [...state.teamScores] as [number, number],
+  };
 
-  // Add current positions to trails
+  // Add current positions to trails and move
   for (const player of newState.players) {
     if (!player.alive) continue;
-    player.trail = [...player.trail, { x: player.x, y: player.y }];
+    player.trail.push({ x: player.x, y: player.y });
 
-    // Move
     switch (player.direction) {
       case "up": player.y -= 1; break;
       case "down": player.y += 1; break;
@@ -88,7 +116,7 @@ export function tick(state: GameState): GameState {
     }
   }
 
-  // Check collisions
+  // Build collision set from all trails
   const allTrails = new Set<string>();
   for (const player of newState.players) {
     for (const t of player.trail) {
@@ -96,8 +124,8 @@ export function tick(state: GameState): GameState {
     }
   }
 
-  for (let i = 0; i < 2; i++) {
-    const p = newState.players[i];
+  // Check collisions for each alive player
+  for (const p of newState.players) {
     if (!p.alive) continue;
 
     // Wall collision
@@ -112,27 +140,31 @@ export function tick(state: GameState): GameState {
     }
   }
 
-  // Head-on collision
-  if (newState.players[0].alive && newState.players[1].alive &&
-      newState.players[0].x === newState.players[1].x && newState.players[0].y === newState.players[1].y) {
-    newState.players[0].alive = false;
-    newState.players[1].alive = false;
+  // Head-on collisions between alive players
+  const alivePlayers = newState.players.filter(p => p.alive);
+  for (let i = 0; i < alivePlayers.length; i++) {
+    for (let j = i + 1; j < alivePlayers.length; j++) {
+      if (alivePlayers[i].x === alivePlayers[j].x && alivePlayers[i].y === alivePlayers[j].y) {
+        alivePlayers[i].alive = false;
+        alivePlayers[j].alive = false;
+      }
+    }
   }
 
-  // Check game over
-  const alive0 = newState.players[0].alive;
-  const alive1 = newState.players[1].alive;
+  // Check if round is over: only one team (or zero) has alive players
+  const team0Alive = newState.players.some(p => p.team === 0 && p.alive);
+  const team1Alive = newState.players.some(p => p.team === 1 && p.alive);
 
-  if (!alive0 || !alive1) {
+  if (!team0Alive || !team1Alive) {
     newState.gameOver = true;
-    if (alive0 && !alive1) {
-      newState.winner = 0;
-      newState.scores = [state.scores[0] + 1, state.scores[1]];
-    } else if (!alive0 && alive1) {
-      newState.winner = 1;
-      newState.scores = [state.scores[0], state.scores[1] + 1];
+    if (team0Alive && !team1Alive) {
+      newState.winnerTeam = 0;
+      newState.teamScores[0]++;
+    } else if (!team0Alive && team1Alive) {
+      newState.winnerTeam = 1;
+      newState.teamScores[1]++;
     } else {
-      newState.winner = null; // draw
+      newState.winnerTeam = null; // draw
     }
   }
 
@@ -171,16 +203,14 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameState) {
 
   // Draw trails and players
   for (const player of state.players) {
-    // Trail with glow
     ctx.shadowColor = player.glowColor;
     ctx.shadowBlur = 8;
-    ctx.fillStyle = player.color;
+    ctx.fillStyle = player.alive ? player.color : `${player.color}44`;
 
     for (const t of player.trail) {
       ctx.fillRect(t.x * cellSize, t.y * cellSize, cellSize, cellSize);
     }
 
-    // Player head (brighter)
     if (player.alive) {
       ctx.shadowBlur = 20;
       ctx.fillStyle = "#ffffff";
